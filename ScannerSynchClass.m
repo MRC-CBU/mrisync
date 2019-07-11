@@ -169,7 +169,7 @@ classdef ScannerSynchClass < handle
     methods
 
         %% Contructor and destructor
-        function obj = ScannerSynchClass(emulSynch,emulButtons)
+        function obj = ScannerSynchClassVerity(emulSynch,emulButtons)
             fprintf('Initialising Scanner Synch...');
             % test environment
             obj.isDAQ = true;
@@ -196,6 +196,11 @@ classdef ScannerSynchClass < handle
                 obj.DAQ.addDigitalChannel('Dev1', 'port0/line2', 'InputOnly');
                 obj.DAQ.addDigitalChannel('Dev1', 'port0/line3', 'InputOnly');
                 obj.DAQ.addDigitalChannel('Dev1', 'port0/line4', 'InputOnly');
+                % Add channels for button 5-8
+                obj.DAQ.addDigitalChannel('Dev1', 'port0/line5', 'InputOnly');
+                obj.DAQ.addDigitalChannel('Dev1', 'port0/line6', 'InputOnly');
+                obj.DAQ.addDigitalChannel('Dev1', 'port0/line7', 'InputOnly');
+                obj.DAQ.addDigitalChannel('Dev1', 'port1/line0', 'InputOnly');
                 
                 switch nargin
                     case 2
@@ -216,7 +221,7 @@ classdef ScannerSynchClass < handle
                 obj.EmulSynch = true;
                 obj.EmulButtons = true;
                 
-                obj.DAQ.Channels = 1:5;
+                obj.DAQ.Channels = 1:9;
                 fprintf('\n');
                 fprintf('WARNING: DAQ card is not in use!\n');
             end
@@ -274,7 +279,7 @@ classdef ScannerSynchClass < handle
         end
         
         function val = get.Clock(obj)
-            val = toc(obj.tID);
+                val = toc(obj.tID);
         end
         
         function set.Keys(obj,val)
@@ -282,7 +287,7 @@ classdef ScannerSynchClass < handle
             if obj.EmulButtons && obj.isPTB, ListenChar(2); end % suppress passing keypresses to MATLAB
         end
         
-        %% Scanner Pulse
+        %% Scanner Pulse434737
         function ResetSynchCount(obj)
             obj.SynchCount = 0;
         end

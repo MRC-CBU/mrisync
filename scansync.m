@@ -1,8 +1,8 @@
-% synchronise with triggers and record button presses from CBU National
-% Instruments scanner interface.
+% synchronise with triggers and record button presses from CBU National Instruments
+% scanner interface.
 %
-% We support a crude emulation mode (a pretend trigger is sent every tr seconds,
-% pretend buttonbox presses are logged on keyboard keys [v,b,n,m]), which is
+% We support a crude emulation mode (a pretend trigger is sent every tr seconds, pretend
+% buttonbox presses are logged on keyboard keys [v,b,n,m] and [a,s,d,f]), which is
 % triggered automatically whenever the NI box cannot be detected. 
 %
 % USAGE:
@@ -12,10 +12,10 @@
 % % wait for the first trigger
 % scansync(1,Inf);
 %
-% % wait for 4s and return early if the first button is pressed
+% % wait for 4s and return early if the first button on the right box is pressed
 % scansync(2,GetSecs+4); % absolute time stamps
 %
-% % wait 2s no matter what (but keep track of triggers and button presses
+% % wait 2s no matter what (but keep track of triggers and all button presses
 % scansync([],GetSecs+2);
 %
 % % wait for the next pulse and return its time stamp and estimated number
@@ -28,11 +28,13 @@
 % which may have occurred during the 2s interval in the example above.
 %
 % 2017-04-13 J Carlin, MRC CBU.
+% 2019-06-19 Added support for two-handed mode
 %
 % [resptime,respnumber,daqstate] = scansync(ind,waituntil)
 function [resptime,respnumber,daqret] = scansync(ind,waituntil)
 
 persistent daqstate
+nchannel = 9;
 
 if strcmp(lower(ind),'reset')
     % special case to handle re-initialising sync e.g. on run transitions
@@ -55,8 +57,8 @@ if isempty(daqstate)
     assert(~isinf(tr),'tr must be finite, numeric');
     if isscalar(tr)
         % usual mode - don't really want to estimate pulses for button presses
-        % (channels 2:5)
-        tr = [tr, NaN(1,4)];
+        % (channels 2:9)
+        tr = [tr, NaN(1,8)];
     end
     % check for DAQ
     hasdaq = false;
@@ -81,6 +83,11 @@ if isempty(daqstate)
         daqstate.hand.addDigitalChannel('Dev1', 'port0/line2', 'InputOnly');
         daqstate.hand.addDigitalChannel('Dev1', 'port0/line3', 'InputOnly');
         daqstate.hand.addDigitalChannel('Dev1', 'port0/line4', 'InputOnly');
+        % Add channels for button 5-8
+        daqstate.hand.addDigitalChannel('Dev1', 'port0/line5', 'InputOnly');
+        daqstate.hand.addDigitalChannel('Dev1', 'port0/line6', 'InputOnly');
+        daqstate.hand.addDigitalChannel('Dev1', 'port0/line7', 'InputOnly');
+        daqstate.hand.addDigitalChannel('Dev1', 'port1/line0', 'InputOnly');
         daqstate.emulate = false;
     else
         fprintf(['NI CARD NOT AVAILABLE - entering emulation mode with tr=' ...
@@ -89,13 +96,13 @@ if isempty(daqstate)
         % struct with a function handle in place of inputSingleScan
         daqstate = daqemulator(tr);
     end
-    daqstate.firstresp = NaN([1,5]);
-    daqstate.lastresp = NaN([1,5]);
-    daqstate.thisresp = NaN([1,5]);
-    daqstate.nrecorded = zeros(1,5);
+    daqstate.firstresp = NaN([1,nchannel]);
+    daqstate.lastresp = NaN([1,nchannel]);
+    daqstate.thisresp = NaN([1,nchannel]);
+    daqstate.nrecorded = zeros(1,nchannel);
     % we count pulses if they are >.02s apart, and button presses if they are
     % more than .2s apart
-    daqstate.pulsedur = [.006,ones(1,4)*.2];
+    daqstate.pulsedur = [.006,ones(1,nchannel-1)*.2];
 end
 
 % always call once (so we get an update even if waituntil==0)
@@ -126,11 +133,11 @@ end
 
 function daqstate = checkdaq(daqstate)
 timenow = GetSecs;
-% call the DAQ - trigger, buttons 1:4
+% call the DAQ - trigger, buttons 1:9
 daqflags = ~daqstate.hand.inputSingleScan();
 
 % wipe whatever we had in thisresp from the last call
-daqstate.thisresp = NaN([1,5]);
+daqstate.thisresp = NaN([1,nchannel]);
 
 % if any of the responses are new, keep track of when this occurred
 newresp = isnan(daqstate.firstresp);
@@ -156,7 +163,8 @@ daqstate.emulate = true;
 daqstate.hand.inputSingleScan = @emulatecard;
 % dummy 
 daqstate.hand.release = @(x)fprintf('reset scansync session.\n');
-daqstate.emulatekeys = [KbName('v'),KbName('b'),KbName('n'),KbName('m')];
+daqstate.emulatekeys = [KbName('v'), KbName('b'), KbName('n'), KbName('m'), ...
+    KbName('a'), KbName('s'), KbName('d'), KbName('f')];
 daqstate.firstcall = true;
 
 function flags = emulatecard()
@@ -165,7 +173,7 @@ function flags = emulatecard()
 daqstate = evalin('caller','daqstate');
 
 % NB inverted coding on NI cards
-flags = true(1,5);
+flags = true(1,nchannel);
 if daqstate.firstcall
     % make sure we return nothing the very first time we call (on init). This is
     % hacky but important to avoid starting the pulse emulator too early.
