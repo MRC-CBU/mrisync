@@ -1,43 +1,79 @@
-% synchronise with triggers and record button presses from CBU National Instruments
-% scanner interface.
+function [resptime,respnumber,daqret] = scansync(ind,waituntil)
+% synchronise with volume acquisition trigger pulses and record button 
+% presses from CBU National Instruments MRI scanner interface.
 %
-% We support a crude emulation mode (a pretend trigger is sent every tr seconds, pretend
-% buttonbox presses are logged on keyboard keys [v,b,n,m] and [a,s,d,f]), which is
-% triggered automatically whenever the NI box cannot be detected. 
+% We support a crude emulation mode (a pretend trigger is sent every tr 
+% seconds, pretend buttonbox presses are logged on keyboard keys [v,b,n,m]
+% and [f,d,s,a]), which is triggered automatically whenever the NI box
+% cannot be detected.
 %
-% USAGE:
+% The first time you use this function in a session, you must initialise it
+% with a special call syntax as described below. After that the call syntax
+% is as in the inputs/outputs section.
+%
+% INITIALISATION:
+% scansync('reset', tr) % where tr is repetition time in seconds
+%
+% INPUTS:
+% ind: array specifying which channel indices to check (in 1:9 range).
+%   Default [], which means that the function waits for the below duration
+%   while logging all responses. If a response occurs on any indexed
+%   channel the function returns immediately.
+% waituntil: optional timestamp to wait until before returning. Default 0,
+%   which means check once and return. NB raw time stamps, so to wait 2s, 
+%   enter GetSecs+2.
+%
+% OUTPUTS:
+% resptime: array of response time for each channel specified in input ind,
+%   or NaN if no response was received on that channel. Raw time stamps
+%   from psychtoolbox (see GetSecs).
+% respnumber: estimated current volume. Note that this is only a time / tr
+%   dead reckoning operation. We do not make any attempt to track actual
+%   TR.
+% daqret: struct with internal state. Mainly useful for debugging and
+%   advanced use cases (see example below).
+%
+% EXAMPLES:
 % % initialise a scansync session
 % tr = 2; % TR in s
 % scansync('reset',tr);
-% % wait for the first trigger
-% scansync(1,Inf);
+% % wait for the first volume trigger (e.g. at start of run), and return
+% % the time stamp when that happened.
+% start_time = scansync(1,Inf);
 %
-% % wait for 4s and return early if the first button on the right box is pressed
-% scansync(2,GetSecs+4); % absolute time stamps
+% % wait for 4s OR return early if the index-finger button on the right is
+% % pressed (button_time will be NaN if there is no press)
+% button_time = scansync(2,GetSecs+4); % absolute time stamps
 %
-% % wait 2s no matter what (but keep track of triggers and all button presses
-% scansync([],GetSecs+2);
+% % wait for the next volume trigger, return its time stamp and estimated number
+% [triggertime, triggernum] = scansync(1,Inf);
 %
-% % wait for the next pulse and return its time stamp and estimated number
-% [triggertime,triggernum] = scansync(1,Inf);
-%
-% % advanced use - inspect the scansync session by assigning the third return
-% variable. you can use this e.g. to pull out logged responses from the example
-% above global daqstate
-% lastpulse = daqstate.lastresp(1); % time stamp for last recording trigger,
-% which may have occurred during the 2s interval in the example above.
+% % wait 2s no matter what (but keep track of all responses)
+% [~, ~, daqstate] = scansync([],GetSecs+2);
+% % time stamp for last recording trigger, which may have occurred during
+% % the 2s interval in the example above.
+% lastpulse_time = daqstate.lastresp(1);
 %
 % 2017-04-13 J Carlin, MRC CBU.
 % 2019-06-19 Added support for two-handed mode
+% 2019-10-02 Documentation, respnumber is scalar return
 %
 % [resptime,respnumber,daqstate] = scansync(ind,waituntil)
-function [resptime,respnumber,daqret] = scansync(ind,waituntil)
 
 persistent daqstate
-nchannel = 9;
 
-if strcmp(lower(ind),'reset')
-    % special case to handle re-initialising sync e.g. on run transitions
+% input check
+if ~exist('ind','var')
+    ind = [];
+end
+if ~exist('waituntil','var') || isempty(waituntil) || isnan(waituntil)
+    waituntil = 0;
+end
+assert(~isinf(waituntil) || ~isempty(ind), ...
+    'unspecified channel index must be combined with finite waituntil duration')
+
+if isstr(ind) && strcmpi(ind,'reset')
+    % special case to handle re-initialising sync
     if ~isempty(daqstate)
         daqstate.hand.release();
     end
@@ -45,21 +81,12 @@ if strcmp(lower(ind),'reset')
     ind = [];
 end
 
-if ~exist('waituntil','var') || isempty(waituntil) || isnan(waituntil)
-    waituntil = 0;
-end
-
 if isempty(daqstate)
     % special initialisation mode
     tr = waituntil;
     % ordinarily infinite wait durations are fine, but not if you're
     % initialising a new session
-    assert(~isinf(tr),'tr must be finite, numeric');
-    if isscalar(tr)
-        % usual mode - don't really want to estimate pulses for button presses
-        % (channels 2:9)
-        tr = [tr, NaN(1,8)];
-    end
+    assert(~isinf(tr) && isscalar(tr),'tr must be finite, numeric, scalar');
     % check for DAQ
     hasdaq = false;
     try
@@ -89,6 +116,7 @@ if isempty(daqstate)
         daqstate.hand.addDigitalChannel('Dev1', 'port0/line7', 'InputOnly');
         daqstate.hand.addDigitalChannel('Dev1', 'port1/line0', 'InputOnly');
         daqstate.emulate = false;
+        daqstate.nchannel = numel(daqstate.hand.Channels);
     else
         fprintf(['NI CARD NOT AVAILABLE - entering emulation mode with tr=' ...
             mat2str(tr) '\n']);
@@ -96,13 +124,13 @@ if isempty(daqstate)
         % struct with a function handle in place of inputSingleScan
         daqstate = daqemulator(tr);
     end
-    daqstate.firstresp = NaN([1,nchannel]);
-    daqstate.lastresp = NaN([1,nchannel]);
-    daqstate.thisresp = NaN([1,nchannel]);
-    daqstate.nrecorded = zeros(1,nchannel);
+    daqstate.firstresp = NaN([1,daqstate.nchannel]);
+    daqstate.lastresp = NaN([1,daqstate.nchannel]);
+    daqstate.thisresp = NaN([1,daqstate.nchannel]);
+    daqstate.nrecorded = zeros(1,daqstate.nchannel);
     % we count pulses if they are >.02s apart, and button presses if they are
     % more than .2s apart
-    daqstate.pulsedur = [.006,ones(1,nchannel-1)*.2];
+    daqstate.pulsedur = [.006,ones(1,daqstate.nchannel-1)*.2];
 end
 
 % always call once (so we get an update even if waituntil==0)
@@ -120,11 +148,10 @@ end
 % entries, they'll all show the same time.
 resptime = daqstate.thisresp(ind);
 
-% time to estimate the current pulse. mainly useful for scanner triggers
-% (channel 1), but we may as well estimate it across the board
+% time to estimate the current pulse. only useful for scanner triggers
+% (channel 1)
 if nargout > 1
-    respnumber = floor((GetSecs - daqstate.firstresp) ./ daqstate.tr);
-    respnumber = respnumber(ind);
+    respnumber = floor((GetSecs - daqstate.firstresp(1)) / daqstate.tr);
 end
 
 if nargout > 2
@@ -137,7 +164,7 @@ timenow = GetSecs;
 daqflags = ~daqstate.hand.inputSingleScan();
 
 % wipe whatever we had in thisresp from the last call
-daqstate.thisresp = NaN([1,nchannel]);
+daqstate.thisresp = NaN([1,daqstate.nchannel]);
 
 % if any of the responses are new, keep track of when this occurred
 newresp = isnan(daqstate.firstresp);
@@ -164,8 +191,9 @@ daqstate.hand.inputSingleScan = @emulatecard;
 % dummy 
 daqstate.hand.release = @(x)fprintf('reset scansync session.\n');
 daqstate.emulatekeys = [KbName('v'), KbName('b'), KbName('n'), KbName('m'), ...
-    KbName('a'), KbName('s'), KbName('d'), KbName('f')];
+    KbName('f'), KbName('d'), KbName('s'), KbName('a')];
 daqstate.firstcall = true;
+daqstate.nchannel = 9;
 
 function flags = emulatecard()
 
@@ -173,7 +201,7 @@ function flags = emulatecard()
 daqstate = evalin('caller','daqstate');
 
 % NB inverted coding on NI cards
-flags = true(1,nchannel);
+flags = true(1,daqstate.nchannel);
 if daqstate.firstcall
     % make sure we return nothing the very first time we call (on init). This is
     % hacky but important to avoid starting the pulse emulator too early.
@@ -195,7 +223,7 @@ else
 end
 
 % check for buttons
-[keyisdown,rawtime,keyCode] = KbCheck;
+[keyisdown,~,keyCode] = KbCheck;
 if keyisdown
     % flip any keys that match the emulator keys
     respk = find(keyCode);
