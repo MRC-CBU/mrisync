@@ -1,4 +1,4 @@
-function [resptime,respnumber,daqret] = scansync(ind,waituntil)
+function [resptime,respnumber,daqret] = scansync(ind,waituntil,tmstrigger)
 % synchronise with volume acquisition trigger pulses and record button 
 % presses from CBU National Instruments MRI scanner interface.
 %
@@ -57,8 +57,9 @@ function [resptime,respnumber,daqret] = scansync(ind,waituntil)
 % 2017-04-13 J Carlin, MRC CBU.
 % 2019-06-19 Added support for two-handed mode
 % 2019-10-02 Documentation, respnumber is scalar return
+% 2020-09-21 Switch to undocumented NI API for performance, trigger send for TMS fMRI
 %
-% [resptime,respnumber,daqstate] = scansync(ind,waituntil)
+% [resptime,respnumber,daqstate] = scansync(ind,waituntil,tmstrigger)
 
 persistent daqstate
 
@@ -71,14 +72,21 @@ if ~exist('waituntil','var') || isempty(waituntil) || isnan(waituntil)
 end
 assert(~isinf(waituntil) || ~isempty(ind), ...
     'unspecified channel index must be combined with finite waituntil duration')
+if ~exist('tmstrigger','var') || isempty(tmstrigger)
+    tmstrigger = false;
+end
 
 if isstr(ind) && strcmpi(ind,'reset')
+    % don't handle conflicting inputs
+    assert(~tmstrigger, 'tmstrigger argument unsupported in reset mode');
+    assert(waituntil~=0, 'must set tr as second arg in reset mode');
     % special case to handle re-initialising sync
     if ~isempty(daqstate)
         daqstate.hand.release();
     end
     daqstate = [];
     ind = [];
+    tmstrigger = false;
 end
 
 if isempty(daqstate)
