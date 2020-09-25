@@ -78,8 +78,8 @@ if ischar(ind) && strcmpi(ind,'reset')
     assert(waituntil~=0, 'must set tr as second arg in reset mode');
     % special case to handle re-initialising sync
     if ~isempty(daqstate)
-        % TODO - check that this works with new undocumented API
-        daqstate.hand.release();
+        status = daq.ni.NIDAQmx.DAQmxClearTask(daqstate.hand);
+        daq.ni.utility.throwOrWarnOnStatus(status);
     end
     daqstate = [];
     ind = [];
@@ -244,7 +244,7 @@ end
 function [flags, daqstate] = inputSingleScan_lowlevel(daqstate)
 
 % adapted from NI_DAQmxReadDigitalLines
-[status,flags,~] = daq.ni.NIDAQmx.DAQmxReadDigitalLines(daqstate.hand, ...
+[status,flags,~,~,~] = daq.ni.NIDAQmx.DAQmxReadDigitalLines(daqstate.hand, ...
     int32(1),double(10),uint32(daq.ni.NIDAQmx.DAQmx_Val_GroupByChannel), ...
     uint8(zeros(1,daqstate.nchannel)),uint32(daqstate.nchannel), ...
     int32(0),int32(0),uint32(0));

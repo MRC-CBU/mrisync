@@ -47,8 +47,8 @@ end
 if ischar(ind) && strcmpi(ind,'reset')
     % special case to handle re-initialising sync
     if ~isempty(daqstate)
-        % TODO - check that this works with new undocumented API
-        daqstate.hand.release();
+        status = daq.ni.NIDAQmx.DAQmxClearTask(daqstate.hand);
+        daq.ni.utility.throwOrWarnOnStatus(status);
     end
     daqstate = [];
     ind = [];
@@ -110,7 +110,7 @@ end
 function triggertime = sendtrigger_lowlevel(daqstate, triggers)
 
 % from NI_DAQmxWriteDigitalLines
-[status, ~] = daq.ni.NI_DAQmxWriteDigitalLines(daqstate.hand, ...
+[status, ~, ~] = daq.ni.NIDAQmx.DAQmxWriteDigitalLines(daqstate.hand, ...
     int32(1), uint32(false), double(10), ...
     uint32(daq.ni.NIDAQmx.DAQmx_Val_GroupByChannel), ...
     triggers, int32(0), uint32(0));
