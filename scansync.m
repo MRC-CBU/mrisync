@@ -1,8 +1,8 @@
-function [resptime,respnumber,daqret] = scansync(ind,waituntil)
-% synchronise with volume acquisition trigger pulses and record button 
+function [resptime,respnumber,daqret] = scansync(ind,waituntil,opt)
+% synchronise with volume acquisition trigger pulses and record button
 % presses from CBU National Instruments MRI scanner interface.
 %
-% We support a crude emulation mode (a pretend trigger is sent every tr 
+% We support a crude emulation mode (a pretend trigger is sent every tr
 % seconds, pretend buttonbox presses are logged on keyboard keys [v,b,n,m]
 % and [f,d,s,a]), which is triggered automatically whenever the NI box
 % cannot be detected.
@@ -14,14 +14,21 @@ function [resptime,respnumber,daqret] = scansync(ind,waituntil)
 % INITIALISATION:
 % scansync('reset', tr) % where tr is repetition time in seconds
 %
+% STOPPING:
+% It is advised to add this line at the end of your script
+% It will clear the task and release the device
+% scansync('stop');
+%
 % INPUTS:
 % ind: array specifying which channel indices to check (in 1:9 range).
 %   Default [], which means that the function waits for the below duration
 %   while logging all responses. If a response occurs on any indexed
 %   channel the function returns immediately.
 % waituntil: optional timestamp to wait until before returning. Default 0,
-%   which means check once and return. NB raw time stamps, so to wait 2s, 
+%   which means check once and return. NB raw time stamps, so to wait 2s,
 %   enter GetSecs+2.
+% opt: additional options. Currently only 'waitrelease', to wait for any
+%   buttons to be released before continuing
 %
 % OUTPUTS:
 % resptime: array of response time for each channel specified in input ind,
@@ -33,37 +40,66 @@ function [resptime,respnumber,daqret] = scansync(ind,waituntil)
 % daqret: struct with internal state. Mainly useful for debugging and
 %   advanced use cases (see example below).
 %
+%
 % EXAMPLES:
-% % initialise a scansync session
+% % Initialise a scansync session
 % tr = 2; % TR in s
 % scansync('reset',tr);
-% % wait for the first volume trigger (e.g. at start of run), and return
+%
+% % Wait for the first volume trigger (e.g. at start of run), and return
 % % the time stamp when that happened.
 % start_time = scansync(1,Inf);
 %
-% % wait for 4s OR return early if the index-finger button on the right is
+% % Wait for 4s OR return early if the index-finger button on the right is
 % % pressed (button_time will be NaN if there is no press)
 % button_time = scansync(2,GetSecs+4); % absolute time stamps
 %
-% % wait for the next volume trigger, return its time stamp and estimated number
+% % Wait for the next volume trigger, return its time stamp and estimated number
 % [triggertime, triggernum] = scansync(1,Inf);
 %
-% % wait 2s no matter what (but keep track of all responses)
+% % Wait 2s no matter what (but keep track of all responses)
 % [~, ~, daqstate] = scansync([],GetSecs+2);
-% % time stamp for last scanner pulse, which may have occurred during % the 2s interval
+%
+% % Time stamp for last scanner pulse, which may have occurred during % the 2s interval
 % in the example above.
 % lastpulse_time = daqstate.lastresp(1);
+%
+% % Wait for buttons to be released before continuing
+%   scansync(2,Inf,'waitrelease'); % will wait infinit time until channel 2
+%   button is released
+%   scansync_tmp(2,GetSecs+10,'waitrelease'); % will wait for 10s until button
+%   is released. If not released will move on anyway.
 %
 % 2017-04-13 J Carlin, MRC CBU.
 % 2019-06-19 Added support for two-handed mode
 % 2019-10-02 Documentation, respnumber is scalar return
 % 2020-09-21 Switch to undocumented NI API for performance
 %
-% [resptime,respnumber,daqstate] = scansync(ind,waituntil)
+% Dace Apsvalka edits
+% 2021-11-10 A new button press is counted only if the button goes from OFF to
+%            ON (before it depended on predefined pulse duration)
+% 2021-11-10 - Added an option to wait for buttons to be released.
+% 2021-12-02 - Added scansync('stop') option to release the device. 
 
 persistent daqstate
 
-% input check
+%+++++++++++++++++++++++++++++
+% Stopping the task
+%+++++++++++++++++++++++++++++
+if ~isempty(daqstate) && strcmpi(ind,'stop')
+    disp('Stopping the task')
+    status = daq.ni.NIDAQmx.DAQmxStopTask(daqstate.hand);
+    daq.ni.utility.throwOrWarnOnStatus(status);
+    disp('Task stopped')
+    return
+end
+if isempty(daqstate) && strcmpi(ind,'stop')
+    disp('Nothing to stop')
+    return    
+end
+%+++++++++++++++++++++++++++++
+% Input check
+%+++++++++++++++++++++++++++++
 if ~exist('ind','var')
     ind = [];
 end
@@ -73,6 +109,14 @@ end
 assert(~isinf(waituntil) || ~isempty(ind), ...
     'unspecified channel index must be combined with finite waituntil duration')
 
+if isempty(daqstate) && ~strcmpi(ind,'reset')
+    error('You must initialise the session first! See the documentation.');
+end
+% /+++++++++++++++++++++++++++
+
+%+++++++++++++++++++++++++++++
+% Initialising
+%+++++++++++++++++++++++++++++
 if ischar(ind) && strcmpi(ind,'reset')
     % don't handle conflicting inputs
     assert(waituntil~=0, 'must set tr as second arg in reset mode');
@@ -85,7 +129,7 @@ if ischar(ind) && strcmpi(ind,'reset')
     ind = [];
 end
 
-if isempty(daqstate)
+if isempty(daqstate) && ~strcmpi(ind,'stop')
     % special initialisation mode
     fprintf('initialising...\n');
     tr = waituntil;
@@ -134,7 +178,7 @@ if isempty(daqstate)
         fprintf('if you see this message in the scanner, DO NOT PROCEED\n')
         % struct with a function handle in place of inputSingleScan
         daqstate.emulate = true;
-        % dummy 
+        % dummy
         daqstate.hand.release = @(x)fprintf('reset scansync session.\n');
         daqstate.emulatekeys = [KbName('v'), KbName('b'), KbName('n'), KbName('m'), ...
             KbName('f'), KbName('d'), KbName('s'), KbName('a')];
@@ -148,26 +192,65 @@ if isempty(daqstate)
     % time stamps for the current response, if valid
     % (why both lastresp and thisresp? To avoid double counting responses)
     daqstate.thisresp = NaN([1,daqstate.nchannel]);
+    % previousflags: what was the state on previous call to know whether the new
+    % state is a new discrete event
+    daqstate.previousflags = zeros(1,daqstate.nchannel);
+    % how many discrete channel pulses recorded
     daqstate.nrecorded = zeros(1,daqstate.nchannel);
-    % we count pulses if they are >.006s apart, and button presses if they are
-    % more than .2s apart
-    daqstate.pulsedur = [.006,ones(1,daqstate.nchannel-1)*.2];
+    % Pulsedur is not needed as dicrete events are counted if they
+    % had been Off and ON not with a specific ON time appart.
+    % However, in emulation mode the pulsedur for the scanner pulse is
+    % still needed.
+    daqstate.pulsedur = .006;
 end
+% /+++++++++++++++++++++++++++
 
+%+++++++++++++++++++++++++++++
+% Wait for buttons to be released
+%+++++++++++++++++++++++++++++
+% % A new option to wait for buttons to be released
+if nargin > 2 && strcmpi(opt,'waitrelease')
+    daqstate = checkdaq(daqstate);
+    if any(daqstate.previousflags(ind))
+        disp('waiting to release buttons...')
+        
+        % wait either fixed time or until released
+        while (GetSecs < waituntil) && any(daqstate.previousflags(ind))
+            WaitSecs(0.001);
+            daqstate = checkdaq(daqstate);
+        end
+    end
+    return;
+end
+% /+++++++++++++++++++++++++++
+
+%+++++++++++++++++++++++++++++
+% Wait for buttons to be pressed
+%+++++++++++++++++++++++++++++
 % always call once (so we get an update even if waituntil==0)
 daqstate = checkdaq(daqstate);
+% wait until waituntil time is over or until a button is pressed (up->down
+% state)
 while (GetSecs < waituntil) && all(isnan(daqstate.thisresp(ind)))
     % avoid choking the CPU, but don't wait so long that we might miss a pulse
     WaitSecs(0.001);
+    % checks pulse state for the channels; is the pulse on or not
     daqstate = checkdaq(daqstate);
 end
+% /+++++++++++++++++++++++++++
 
-% so now this will be NaN if no responses happened, or otherwise not nan. Note
-% that if you entered multiple indices we will return when the FIRST of these is
+%+++++++++++++++++++++++++++++
+% Outputs
+%+++++++++++++++++++++++++++++
+% The button press time.
+% This will be NaN if no responses happened, or otherwise not NaN. Note
+% that if you entered multiple indices, it will return when the FIRST of these is
 % true. So resptime will practically always only have a single non-nan entry
 % (barring simultaneous key presses), and to the extent that you have multiple
 % entries, they'll all show the same time.
-resptime = daqstate.thisresp(ind);
+if nargout > 0
+    resptime = daqstate.thisresp(ind);
+end
 
 % time to estimate the current pulse. only useful for scanner triggers
 % (channel 1)
@@ -175,40 +258,69 @@ if nargout > 1
     respnumber = floor((GetSecs - daqstate.firstresp(1)) / daqstate.tr);
 end
 
+% Struct with internal state
 if nargout > 2
     daqret = daqstate;
 end
 
+% ========================================================================
+% FUNCTIONS
+% ========================================================================
+% ________________________________________________________________________
+%
+% Checking and updating channel pulse states
+% ________________________________________________________________________
 function daqstate = checkdaq(daqstate)
-
+% wipe whatever was in thisresp from the last call
+daqstate.thisresp = NaN([1,daqstate.nchannel]);
 % time stamp of the check, before any other overhead
 timenow = GetSecs;
 
+% =====
+% Checks which pulses are ON
+% =====
 % perilously close to OO here
 [daqflags, daqstate] = feval(daqstate.checkfun, daqstate);
 % inverted coding
-daqflags = ~daqflags;
+daqflags = ~daqflags; % 1 = 0N, 0 = OFF
+% /=====
 
-% wipe whatever we had in thisresp from the last call
-daqstate.thisresp = NaN([1,daqstate.nchannel]);
-
+% =====
+% First time registering
+% =====
 % if this is the first time we observe any of the channels, we need to log the time
 % stamp of this into all registers.
 newresp = isnan(daqstate.firstresp);
 daqstate.firstresp(daqflags & newresp) = timenow;
 daqstate.lastresp(daqflags & newresp) = timenow;
 daqstate.thisresp(daqflags & newresp) = timenow;
+% /=====
 
-% were any responses sufficiently far past a previous response to count as a
-% discrete event?
-valid = daqflags & timenow>((daqstate.lastresp+daqstate.pulsedur));
-if any(valid)
-    % if so, we need to update lastresp and thisresp
-    daqstate.lastresp(valid) = timenow;
-    daqstate.thisresp(valid) = timenow;
-    daqstate.nrecorded(valid) = daqstate.nrecorded(valid)+1;
+% =====
+% Record valid presses
+% =====
+% Discrete events are if the pulse (either scanner or button) was OFF and then ON.
+
+% Check if any channel was OFF on the last call and is ON on the current
+valid_pressed = ~daqstate.previousflags & daqflags;
+% Such states are regarded as new discrete events
+if any(valid_pressed)
+    % if so, we need to update lastresp
+    daqstate.lastresp(valid_pressed) = timenow;
+    % and thisresp
+    daqstate.thisresp(valid_pressed) = timenow;
+    % and add nrecorded
+    daqstate.nrecorded(valid_pressed) = daqstate.nrecorded(valid_pressed)+1;
 end
+% /=====
 
+% Update previousflags for the next call
+daqstate.previousflags = daqflags;
+
+% ________________________________________________________________________
+%
+% Pulse/button checking in emulation mode
+% ________________________________________________________________________
 function [flags, daqstate] = inputSingleScan_emulate(daqstate)
 
 % NB inverted coding on NI cards
@@ -241,12 +353,25 @@ if keyisdown
     flags(ind+1) = false;
 end
 
+% ________________________________________________________________________
+%
+% Pulse/button checking in real mode
+% ________________________________________________________________________
 function [flags, daqstate] = inputSingleScan_lowlevel(daqstate)
 
 % adapted from NI_DAQmxReadDigitalLines
-[status,flags,~,~,~] = daq.ni.NIDAQmx.DAQmxReadDigitalLines(daqstate.hand, ...
-    int32(1),double(10),uint32(daq.ni.NIDAQmx.DAQmx_Val_GroupByChannel), ...
-    uint8(zeros(1,daqstate.nchannel)),uint32(daqstate.nchannel), ...
-    int32(0),int32(0),uint32(0));
+[status,flags,~,~,~] = daq.ni.NIDAQmx.DAQmxReadDigitalLines(...
+    daqstate.hand, ... % taskHandle
+    int32(1), ... % numSampsPerChan
+    double(10), ... % timeout
+    uint32(daq.ni.NIDAQmx.DAQmx_Val_GroupByChannel), ... % fillMode; DAQmx_Val_GroupByChannel: Group by channel (non-interleaved)
+    uint8(zeros(1,daqstate.nchannel)), ... % arraySizeInBytes
+    uint32(daqstate.nchannel), ... % arraySizeInBytes
+    int32(0), ... % sampsPerChanRead
+    int32(0), ... % numBytesPerSamp
+    uint32(0)); % reserved
+
 daq.ni.utility.throwOrWarnOnStatus(status);
 % /adapted from NI_DAQmxReadDigitalLines
+
+% ========================================================================
